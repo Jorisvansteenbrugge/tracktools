@@ -1,0 +1,87 @@
+#!/usr/bin/env python
+
+import argparse
+
+class Gene():
+    
+    def __init__(self, contig, start,stop,strand, attribute):
+        self.contig    = contig
+        self.start     = int(start) - 1
+        self.stop      = int(stop)
+        self.strand    = strand
+        self.attribute = attribute
+
+        self.exons  = []
+
+    def __str__(self):
+        bedline = []
+        bedline.append(self.contig)          # chrom
+        bedline.append(str(self.start))      # chromStart
+        bedline.append(str(self.stop))       # chromStop
+        bedline.append(self.getGeneName())   # Gene name
+        bedline.append('0')                  # score
+        bedline.append(self.strand)          # strand
+        bedline.append(str(self.start))      # thickStart
+        bedline.append(str(self.stop))       # thickEnd
+        bedline.append("0,0,0")              # RGB -> we are not using this atm.
+        bedline.append(str(len(self.exons))) # Block count
+        bedline.append(self.getExonLengths())# Block sizes
+        bedline.append(self.getExonStarts()) # BLock starts
+        return "\t".join(bedline)
+
+    def add_exon(self, start, stop):
+        self.exons.append(Exon(start, stop))
+
+    def getGeneName(self):
+        atts = self.attribute.split(';')
+        name = atts[0].replace("ID=","")
+        return name
+
+    def getExonLengths(self):
+        return ','.join([str(len(exon)) for exon in self.exons])
+
+    def getExonStarts(self):
+        return ','.join( [str(exon.getStart() - self.start) for exon in self.exons] )
+
+class Exon():
+    
+    def __init__(self, start, stop):
+        self.start = int(start) - 1
+        self.stop  = int(stop)
+
+    def __len__(self):
+        return self.stop - self.start
+
+    def getStart(self):
+        return self.start
+    
+def arguments():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("-i", dest = 'inputGFF', 
+                        help = "GFF file that was created by MAKER", required = True)
+    return parser.parse_args()
+
+
+def parseGFF(options):
+    with open(options.inputGFF) as input_GFF:
+        c_gene = None
+        for line in input_GFF:
+            line = line.rstrip("\n").split("\t")
+            if len(line) != 9 or "maker" not in line[1]:
+                continue
+            if "gene" in line:
+                if not c_gene:
+                    c_gene = Gene(line[0], line[3], line[4], line[6], line[8]) 
+                else:
+                    print(c_gene)
+                    c_gene = None
+                    c_gene = Gene(line[0], line[3], line[4], line[6], line[8])
+
+            elif 'exon' in line:
+                c_gene.add_exon(line[3], line[4])
+        print(c_gene)
+
+if __name__ == "__main__":
+    options = arguments()
+    parseGFF(options)
