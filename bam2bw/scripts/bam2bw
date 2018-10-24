@@ -1,0 +1,157 @@
+#!/usr/bin/env python
+# Copyright (c) 2013 Simon van Heeringen <s.vanheeringen@ncmls.ru.nl>
+#
+# This module is free software. You can redistribute it and/or modify it under 
+# the terms of the MIT License, see the file COPYING included with this 
+# distribution.
+
+import sys
+import os
+from optparse import OptionParser,OptionGroup
+from distutils.spawn import find_executable
+import StringIO
+from bam2bw.bampipes import *
+from bam2bw import config as cfg
+from bam2bw.util import get_total_reads, split_stranded_bam
+from tempfile import NamedTemporaryFile
+
+VERSION = cfg.VERSION 
+
+usage = "Usage: %prog -i <bamfile> -o <bigWigFile> [options]"
+version = "%prog " + str(VERSION)
+parser = OptionParser(version=version, usage=usage)
+group1 = OptionGroup(parser, 'Optional')
+
+parser.add_option("-i", dest="infile", help="Input file name (BAM) or - for STDIN", metavar="FILE")
+parser.add_option("-o", dest="outfile", help="Output file name (bigWig)", metavar="FILE")
+group1.add_option("-g", dest="genome", help="Genome (chrom sizes), when reading from STDIN", metavar="FILE")
+group1.add_option("-e", dest="extend", help="Extend reads to SIZE or specify 'auto' to determine", metavar="SIZE", default=0)
+group1.add_option("-f", dest="fragment", help="Genomic fragment based", action="store_true", default=False)
+group1.add_option("-s", 
+                  dest="scale", 
+                  help="Scaling factor", 
+                  type=float)
+group1.add_option("-c", 
+                  dest="cpmf", 
+                  help="adjust scale for fragment size and number of total reads to produce coverage per fragment per million total reads per kb", 
+                  default=False,
+                  action="store_true",
+                  )
+group1.add_option("-S", 
+                  dest="splitstrand", 
+                  help = "Create seperate bigWig files for each strand. If the "
+                         "BAM file is paired-end please specify the -p option. "
+                         "Only properly mapped and paired reads are used", 
+                  action="store_true", 
+                  default=False)
+group1.add_option("-p", 
+                  dest="pe", 
+                  help = "BAM file is paired-end", 
+                  action="store_true", 
+                  default=False)
+group1.add_option("-D", dest="rmdup", help="Keep duplicates (removed by default)", action="store_false", default=True)
+group1.add_option("-R", dest="rmrepeat", help="Keep repeats (removed by default)", action="store_false", default=True)
+
+parser.add_option_group(group1)
+(options, args) = parser.parse_args()
+
+for opt in [options.infile, options.outfile]:
+    if not opt:
+        parser.print_help()
+        sys.exit(1)
+
+# If the genome file is not given, generate it from the BAM file
+genome = options.genome
+if not options.genome:
+    if options.infile == "-":
+        print "Need a genome file when reading input from STDIN!"
+        sys.exit(1)
+    else:
+        genome = genome_from_bamfile(options.infile)
+
+for opt in [options.infile, genome]:
+    if opt != "-" and not os.path.exists(opt):
+        print "File %s does not exist!" % opt
+        sys.exit(1)
+
+for x in [cfg.BEDTOOLS, cfg.WIG2BIGWIG, cfg.SAMTOOLS]:
+    if not find_executable(x):
+        print "%s not found, please add it to your path" % x
+        sys.exit(1)
+
+if options.fragment and options.extend > 0:
+    print "Options fragment and extend are mutually exclusive!"
+    sys.exit(1)
+
+extend = 0
+if options.extend == "auto":
+    if options.infile == "-":
+        print "Sorry, calculation of fragment length only works with files for now!"
+        sys.exit(1)
+    from bam2bw import spp
+    sys.stderr.write("Determining fragment size\n")
+    extend = spp.get_fragmentsize(options.infile)
+    sys.stderr.write("Using fragmentsize {0} as extend\n".format(extend))
+else:
+    try:
+        extend = int(options.extend)
+    except:
+        print "Invalid value for extend"
+        sys.exit(1)
+
+scale = 1.0
+if options.scale: 
+    if options.cpmf:
+        print "Options scale and cpmf are mutually exclusive!"
+        sys.exit(1)
+    scale = options.scale
+elif options.cpmf:
+    if extend == 0:
+        sys.stderr.write("Assuming extend auto\n")
+        from bam2bw import spp
+        sys.stderr.write("Determining fragment size\n")
+        extend = spp.get_fragmentsize(options.infile)
+        sys.stderr.write("Using fragmentsize {0} as extend\n".format(extend))
+    
+    readcount = float(get_total_reads(options.infile))
+    # Scale:r relative to 1 million reads, per 1kb
+    scale = 1e6 / readcount / float(extend) * 1000.0
+    sys.stderr.write("Using scale: {0}\n".format(scale))
+
+if options.infile == "-":
+    fobj = sys.stdin
+else:
+    fobj = open(options.infile)
+
+outfile = options.outfile
+if outfile.endswith(".bw"):
+    prefix = outfile[:-3]
+else:
+    prefix = outfile
+
+files = [(fobj, outfile, False)]
+
+if options.splitstrand:
+    tmpf = NamedTemporaryFile()
+    tmpr = NamedTemporaryFile()
+    fname = options.infile
+    if fname == "-":
+        tmpin = NamedTemporaryFile()
+        tmpin.write(fobj.read())
+        tmpin.flush()
+        fname = tmpin.name
+    
+    split_stranded_bam(fname, tmpf.name, tmpr.name, pe=options.pe)
+
+    files = [ 
+        (open(tmpf.name), "{0}.forward.bw".format(prefix), False), 
+        (open(tmpr.name), "{0}.reverse.bw".format(prefix), True), 
+        ]
+
+for fobj, out, reverse in files:
+    f = bamview(fobj, rmdup=options.rmdup, rmrepeat=options.rmrepeat)
+    f = bamtobed(f, fragment=options.fragment) 
+    if extend > 0:
+        f = extendbed(f, extend)
+    f = genomecov(f, genome, scale=scale, reverse=reverse)
+    makebigwig(f, out, genome)

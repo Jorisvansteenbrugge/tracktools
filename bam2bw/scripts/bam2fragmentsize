@@ -1,0 +1,38 @@
+#!/usr/bin/env python
+# Copyright (c) 2013 Simon van Heeringen <s.vanheeringen@ncmls.ru.nl>
+#
+# This module is free software. You can redistribute it and/or modify it under 
+# the terms of the MIT License, see the file COPYING included with this 
+# distribution.
+
+import sys
+import os
+from optparse import OptionParser,OptionGroup
+from distutils.spawn import find_executable
+from bam2bw import config as cfg
+from bam2bw import spp
+
+VERSION = cfg.VERSION 
+
+usage = "Usage: %prog -i <bamfile>"
+version = "%prog " + str(VERSION)
+parser = OptionParser(version=version, usage=usage)
+parser.add_option("-i", dest="infile", help="Input file name (BAM) or - for STDIN", metavar="FILE")
+(options, args) = parser.parse_args()
+
+for opt in [options.infile]:
+    if not opt:
+        parser.print_help()
+        sys.exit(1)
+
+for x in [cfg.SAMTOOLS]:
+    if not find_executable(x):
+        print "%s not found, please add it to your path" % x
+        sys.exit(1)
+
+if options.infile == "-":
+    print "Sorry, calculation of fragment length only works with files for now!"
+    sys.exit(1)
+
+sys.stderr.write("Determining fragment size\n")
+print spp.get_fragmentsize(options.infile)

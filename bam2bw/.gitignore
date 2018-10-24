@@ -1,0 +1,8 @@
+bam2bw.egg-info/
+build/
+tests/__pycache__/
+tests/*.pyc
+bam2bw/*.pyc
+*.pyc
+tmp/
+dist/
